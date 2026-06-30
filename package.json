@@ -7,16 +7,11 @@
     "claude-code-mini": "./src/index.ts"
   },
   "scripts": {
-    "dev": "bun --watch src/index.ts",
     "start": "bun run src/index.ts",
-    "build": "bun build src/index.ts --target bun --outdir dist",
+    "tui": "bun run src/index.ts",
     "typecheck": "tsc --noEmit",
     "check": "biome check .",
-    "format": "biome format --write .",
-    "test": "bun test",
-    "smoke:diff": "bun run src/index.ts diff \"hello\" \"hello world\"",
-    "smoke:schema": "bun run src/index.ts schema",
-    "smoke:tui": "bun run src/index.ts tui --message \"hello terminal\""
+    "format": "biome format --write ."
   },
   "dependencies": {
     "commander": "^14.0.2",
