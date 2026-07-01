@@ -13,8 +13,7 @@ import type { CodexLoginMethod } from "./model/providers/codex-oauth"
 import { loginCodex } from "./model/providers/codex-oauth"
 import { buildSystemPrompt } from "./prompt/system"
 
-const DEFAULT_GREETING =
-  "欢迎使用 claude-code-mini。/login 登录（Codex 订阅 / Kimi key），/model 切换模型，然后即可对话。"
+const DEFAULT_GREETING = "欢迎使用 claude-code-mini"
 
 const KIMI_STORE_KEY = "kimi"
 
