@@ -1,153 +1,145 @@
 import { Box, useApp, useInput } from "ink"
 import { useRef, useState } from "react"
+import type { Command, CommandChoice, CommandContext } from "./command"
 import { Header } from "./components/header"
 import { MessageView } from "./components/message-view"
 import { PromptLine } from "./components/prompt-line"
 import { StatusLine } from "./components/status-line"
-import type { LoginContext, LoginOption, LoginService } from "./login"
-import type { ModelChoice, ModelController } from "./model"
-import type { SelectOption } from "./prompt"
 import { SelectPrompt, TextPrompt } from "./prompt"
 import type { Responder } from "./responder"
 import type { Message, Role } from "./types"
 
-type Mode = "chat" | "selecting-login" | "selecting-model" | "text-input"
-
-interface PendingText {
-  label: string
-  resolve: (value: string) => void
-  reject: (reason: Error) => void
-}
+// 通用交互态：命令通过 ctx.select / ctx.promptText 驱动，替代每命令一个 mode。
+type Interaction =
+  | {
+      kind: "select"
+      message: string
+      items: CommandChoice<unknown>[]
+      onSelect: (value: unknown) => void
+    }
+  | { kind: "text"; label: string; onSubmit: (value: string) => void; onCancel: () => void }
 
 export interface AppProps {
   responder: Responder
   greeting?: string
-  login?: LoginService
-  models?: ModelController
+  commands?: Command[]
 }
 
-export function App({ responder, greeting, login, models }: AppProps) {
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+export function App({ responder, greeting, commands = [] }: AppProps) {
   const { exit } = useApp()
   const idRef = useRef(0)
   const [messages, setMessages] = useState<Message[]>(() =>
-    greeting === undefined ? [] : [{ id: 0, role: "assistant", content: greeting }],
+    greeting === undefined ? [] : [{ id: 0, role: "assistant", content: greeting, meta: true }],
   )
   const [draft, setDraft] = useState("")
   const [busy, setBusy] = useState(false)
-  const [mode, setMode] = useState<Mode>("chat")
-  const [modelChoices, setModelChoices] = useState<ModelChoice[]>([])
-  const [pendingText, setPendingText] = useState<PendingText | null>(null)
+  const [interaction, setInteraction] = useState<Interaction | null>(null)
 
-  function addMessage(role: Role, content: string) {
+  function addMessage(role: Role, content: string, meta: boolean) {
     idRef.current += 1
-    const message: Message = { id: idRef.current, role, content }
-    setMessages((prev) => [...prev, message])
+    setMessages((prev) => [...prev, { id: idRef.current, role, content, meta }])
+  }
+
+  function makeContext(): CommandContext {
+    return {
+      print: (message) => addMessage("assistant", message, true),
+      select: <T,>(message: string, items: CommandChoice<T>[]): Promise<T> =>
+        new Promise<T>((resolve) => {
+          setInteraction({
+            kind: "select",
+            message,
+            items: items as CommandChoice<unknown>[],
+            onSelect: (value) => resolve(value as T),
+          })
+        }),
+      promptText: (label: string): Promise<string> =>
+        new Promise<string>((resolve, reject) => {
+          setInteraction({
+            kind: "text",
+            label,
+            onSubmit: resolve,
+            onCancel: () => reject(new Error("已取消")),
+          })
+        }),
+      exit: () => exit(),
+    }
+  }
+
+  async function runCommand(cmd: Command) {
+    setBusy(true)
+    try {
+      await cmd.run(makeContext())
+    } catch (error) {
+      addMessage("assistant", `⚠ /${cmd.name} 出错：${errorText(error)}`, true)
+    } finally {
+      setBusy(false)
+      setInteraction(null)
+    }
   }
 
   async function submit(text: string) {
     const trimmed = text.trim()
     if (trimmed.length === 0) return
-    if (trimmed === "/exit" || trimmed === "/quit") {
-      exit()
-      return
-    }
-    if (trimmed === "/login") {
+
+    if (trimmed.startsWith("/")) {
       setDraft("")
-      if (login === undefined) addMessage("assistant", "登录暂不可用。")
-      else setMode("selecting-login")
-      return
-    }
-    if (trimmed === "/model") {
-      setDraft("")
-      await openModelSelect()
+      const name = trimmed.slice(1).trim()
+      const cmd = commands.find((c) => c.name === name)
+      if (cmd === undefined) {
+        addMessage("assistant", `未知命令：${trimmed}`, true)
+        return
+      }
+      await runCommand(cmd)
       return
     }
 
-    const history = messages
-    addMessage("user", trimmed)
+    // 模型历史只取非 meta 的真实对话轮次。
+    const history = messages.filter((m) => m.meta !== true)
+    addMessage("user", trimmed, false)
     setDraft("")
     setBusy(true)
 
     let reply: string
+    let replyIsMeta = false
     try {
       reply = await responder.respond(trimmed, history)
     } catch (error) {
-      reply = `⚠ 出错：${error instanceof Error ? error.message : String(error)}`
+      reply = `⚠ 出错：${errorText(error)}`
+      replyIsMeta = true // 错误提示不回灌进模型历史
     }
-    addMessage("assistant", reply)
+    addMessage("assistant", reply, replyIsMeta)
     setBusy(false)
   }
 
-  async function openModelSelect() {
-    if (models === undefined) {
-      addMessage("assistant", "没有可选模型。")
-      return
-    }
-    const choices = await models.list()
-    if (choices.length === 0) {
-      addMessage("assistant", "没有可选模型。")
-      return
-    }
-    setModelChoices(choices)
-    setMode("selecting-model")
+  function handleSelect(value: unknown) {
+    const current = interaction
+    setInteraction(null)
+    if (current?.kind === "select") current.onSelect(value)
   }
 
-  // 索取一行文本输入：切到 text-input 模式，回车 resolve、Esc reject。
-  function requestText(label: string): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      setPendingText({ label, resolve, reject })
-      setMode("text-input")
-    })
+  function handleTextSubmit(value: string) {
+    const current = interaction
+    setInteraction(null)
+    if (current?.kind === "text") current.onSubmit(value)
   }
 
-  function onTextSubmit(value: string) {
-    const pending = pendingText
-    setPendingText(null)
-    setMode("chat")
-    pending?.resolve(value)
-  }
-
-  function onTextCancel() {
-    const pending = pendingText
-    setPendingText(null)
-    setMode("chat")
-    pending?.reject(new Error("已取消"))
-  }
-
-  async function runLoginOption(option: LoginOption) {
-    setMode("chat")
-    setBusy(true)
-    addMessage("assistant", `开始：${option.label}`)
-    const ctx: LoginContext = {
-      info: (info) => addMessage("assistant", info),
-      prompt: (label) => requestText(label),
-    }
-    try {
-      const result = await option.run(ctx)
-      addMessage("assistant", result)
-    } catch (error) {
-      addMessage(
-        "assistant",
-        `⚠ 登录失败：${error instanceof Error ? error.message : String(error)}`,
-      )
-    }
-    setBusy(false)
-  }
-
-  function selectModel(id: string) {
-    setMode("chat")
-    models?.select(id)
-    addMessage("assistant", `已切换模型：${id}`)
+  function handleTextCancel() {
+    const current = interaction
+    setInteraction(null)
+    if (current?.kind === "text") current.onCancel()
   }
 
   useInput((input, key) => {
-    // 非聊天模式（登录/模型选择/文本输入）时，让对应组件接管按键。
-    if (busy || mode !== "chat") return
+    // 交互中（select/text）或忙时，让对应组件接管按键。
+    if (busy || interaction !== null) return
     if (key.return) {
-      // 兜底：submit 任何分支（含 /model 的异步列举）抛错都渲进 TUI，不被 void 吞掉。
       submit(draft).catch((error) => {
         setBusy(false)
-        addMessage("assistant", `⚠ 出错：${error instanceof Error ? error.message : String(error)}`)
+        addMessage("assistant", `⚠ 出错：${errorText(error)}`, true)
       })
       return
     }
@@ -164,25 +156,22 @@ export function App({ responder, greeting, login, models }: AppProps) {
     }
   })
 
-  const loginOptions: SelectOption<LoginOption>[] =
-    login === undefined
-      ? []
-      : login.options.map((option) => ({ label: option.label, value: option }))
-  const modelOptions: SelectOption<string>[] = modelChoices.map((m) => ({
-    label: m.configured ? `${m.label} ✓` : `${m.label} ·未配置`,
-    value: m.id,
-  }))
-
   return (
     <Box flexDirection="column">
       <Header />
       <MessageView messages={messages} />
-      {mode === "selecting-login" ? (
-        <SelectPrompt message="选择登录方式：" options={loginOptions} onSelect={runLoginOption} />
-      ) : mode === "selecting-model" ? (
-        <SelectPrompt message="选择模型：" options={modelOptions} onSelect={selectModel} />
-      ) : mode === "text-input" && pendingText !== null ? (
-        <TextPrompt label={pendingText.label} onSubmit={onTextSubmit} onCancel={onTextCancel} />
+      {interaction?.kind === "select" ? (
+        <SelectPrompt
+          message={interaction.message}
+          options={interaction.items}
+          onSelect={handleSelect}
+        />
+      ) : interaction?.kind === "text" ? (
+        <TextPrompt
+          label={interaction.label}
+          onSubmit={handleTextSubmit}
+          onCancel={handleTextCancel}
+        />
       ) : busy ? (
         <StatusLine />
       ) : (
