@@ -1,6 +1,7 @@
 import type { Credential } from "../credential"
 import type { ModelProvider } from "../provider"
-import type { ModelRequest, ModelResponse } from "../types"
+import { sseEvents } from "../sse"
+import type { ModelRequest, ModelStreamEvent } from "../types"
 import { USER_AGENT } from "../user-agent"
 import { CODEX_RESPONSES_ENDPOINT, ORIGINATOR } from "./codex-oauth"
 
@@ -47,8 +48,25 @@ export function buildResponsesBody(request: ModelRequest): ResponsesBody {
 }
 
 /**
+ * 从单个 SSE data payload 里取出本片文本增量（response.output_text.delta）。
+ * 非该事件或坏 JSON 返回空串。流式增量消费用；纯函数，便于测试。
+ */
+export function extractTextDelta(payload: string): string {
+  let event: { type?: string; delta?: string }
+  try {
+    event = JSON.parse(payload) as { type?: string; delta?: string }
+  } catch {
+    return ""
+  }
+  if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
+    return event.delta
+  }
+  return ""
+}
+
+/**
  * 从 Responses 的 SSE 负载里抽取助手文本：累加所有 response.output_text.delta。
- * 纯函数，方便测试；不处理工具调用（text-first）。
+ * 纯函数，方便测试；不处理工具调用（text-first）。整段缓冲版本，供非流式场景/测试。
  */
 export function extractResponseText(sse: string): string {
   let text = ""
@@ -57,15 +75,7 @@ export function extractResponseText(sse: string): string {
     if (!trimmed.startsWith("data:")) continue
     const payload = trimmed.slice("data:".length).trim()
     if (payload.length === 0 || payload === "[DONE]") continue
-    let event: { type?: string; delta?: string }
-    try {
-      event = JSON.parse(payload) as { type?: string; delta?: string }
-    } catch {
-      continue
-    }
-    if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
-      text += event.delta
-    }
+    text += extractTextDelta(payload)
   }
   return text
 }
@@ -90,7 +100,7 @@ export class CodexProvider implements ModelProvider {
     return (await this.credential.isConfigured?.()) ?? true
   }
 
-  async complete(request: ModelRequest): Promise<ModelResponse> {
+  async *stream(request: ModelRequest): AsyncGenerator<ModelStreamEvent, void, unknown> {
     const authHeaders = await this.credential.authHeaders()
     const res = await fetch(this.baseURL, {
       method: "POST",
@@ -103,12 +113,20 @@ export class CodexProvider implements ModelProvider {
         "session-id": crypto.randomUUID(),
       },
       body: JSON.stringify(buildResponsesBody(request)),
+      signal: request.signal ?? null,
     })
-    if (!res.ok) {
+    if (!res.ok || res.body === null) {
       const detail = await res.text().catch(() => "")
       throw new Error(`Codex 请求失败: ${res.status} ${detail}`.trim())
     }
-    const sse = await res.text()
-    return { type: "text", text: extractResponseText(sse) }
+    let text = ""
+    for await (const payload of sseEvents(res.body)) {
+      const delta = extractTextDelta(payload)
+      if (delta.length > 0) {
+        text += delta
+        yield { type: "text_delta", text: delta }
+      }
+    }
+    yield { type: "done", response: { type: "text", text } }
   }
 }

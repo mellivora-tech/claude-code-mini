@@ -1,17 +1,19 @@
 import { createInterface } from "node:readline/promises"
+import { createMemoryStore, QueryEngine } from "./agent/engine"
 import { buildCli } from "./cli"
 import type { LoginContext, LoginOption, LoginService } from "./interface/login"
 import type { ModelChoice, ModelController } from "./interface/model"
 import type { SelectOption } from "./interface/prompt"
 import { promptSelect } from "./interface/prompt"
-import type { Responder } from "./interface/responder"
+import type { ConfirmFn, Responder } from "./interface/responder"
 import { runTui } from "./interface/run"
 import { AuthStore } from "./model/auth-store"
-import type { ModelMessage } from "./model/index"
 import { createModelService } from "./model/index"
 import type { CodexLoginMethod } from "./model/providers/codex-oauth"
 import { loginCodex } from "./model/providers/codex-oauth"
+import { createPermissionGate } from "./permission/gate"
 import { buildSystemPrompt } from "./prompt/system"
+import { createBuiltinRegistry } from "./tools/builtin/index"
 
 const DEFAULT_GREETING = "欢迎使用 claude-code-mini"
 
@@ -43,26 +45,34 @@ export class Bootstrap {
     })
   }
 
-  /** 组合 model + prompt 层成对话能力：responder（注入 system prompt）+ models（列出/切换/配置状态）。 */
+  /**
+   * 组合 model + tools + permission + prompt 成对话能力：
+   * responder（QueryEngine 支撑的事件流）+ models（列出/切换/配置状态）。
+   */
   private createChat(): { responder: Responder; models: ModelController } {
     const service = createModelService()
     const catalog = service.models()
     let current = catalog[0]?.id ?? "gpt-5.4"
 
-    const responder: Responder = {
-      respond: async (input, history) => {
-        // 过滤空内容消息：空 assistant 轮次对 OpenAI 兼容接口（Kimi）是非法的。
-        const prior = history
-          .filter((m) => m.content.trim().length > 0)
-          .map((m): ModelMessage => ({ role: m.role, content: m.content }))
-        const messages: ModelMessage[] = [
-          { role: "system", content: buildSystemPrompt(current) },
-          ...prior,
-          { role: "user", content: input },
-        ]
-        const result = await service.complete({ model: current, messages })
-        return result.type === "text" ? result.text : "（模型请求了工具调用，工具层尚未接入）"
+    // 权限确认走一个可替换的 holder：每次 send 由界面注入当轮的 confirm 回调。
+    const confirm: { fn: ConfirmFn } = { fn: async () => false }
+    const engine = new QueryEngine(
+      {
+        model: service,
+        tools: createBuiltinRegistry(),
+        permission: createPermissionGate((call) => confirm.fn(call)),
+        system: (modelId) => buildSystemPrompt(modelId),
+        modelId: () => current,
       },
+      createMemoryStore(),
+    )
+
+    const responder: Responder = {
+      send: (input, confirmFn) => {
+        confirm.fn = confirmFn
+        return engine.send(input, { cwd: process.cwd() })
+      },
+      interrupt: () => engine.interrupt(),
     }
 
     const models: ModelController = {

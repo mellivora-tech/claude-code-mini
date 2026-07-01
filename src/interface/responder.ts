@@ -1,31 +1,37 @@
-import type { Message } from "./types"
+import type { QueryEvent } from "../agent/events"
+import type { ConfirmFn } from "../permission/gate"
+
+export type { ConfirmFn } from "../permission/gate"
 
 /**
- * 界面层与模型层之间的契约。interface 只管收一条用户输入、拿回一段回复，
- * 不关心背后是 mock、真模型，还是完整的 agent loop。
+ * 界面层与编排层之间的契约。interface 只管：递一条用户输入 + 一个"危险操作确认"回调，
+ * 拿回一串事件流（打字机文本 / 工具状态 / 结束）。背后是 mock 还是完整 agent loop 它不关心。
  */
 export interface Responder {
-  respond(input: string, history: readonly Message[]): Promise<string>
+  /** 发起一轮对话。confirm 用于权限层弹确认（只读工具不会触发）。 */
+  send(input: string, confirm: ConfirmFn): AsyncIterable<QueryEvent>
+  /** 中断当前这一轮（Ctrl+C）。 */
+  interrupt(): void
 }
 
 /**
- * 占位响应器：模型层尚未实现时使用，回声 + 模拟思考延迟。
- * 接入真模型后替换为调用 agent loop 的实现即可。
+ * 占位响应器：不接模型时用，把输入回声成流式事件（逐字 text_delta + done）。
+ * 接入真 agent loop 后由 bootstrap 换成 QueryEngine 支撑的实现。
  */
 export function createEchoResponder(): Responder {
   return {
-    async respond(input) {
-      await delay(450)
-      return [
-        `（mock 回复）收到：「${input}」`,
-        "目前还没接模型层，这是 interface 层的占位响应。",
-      ].join("\n")
+    async *send(input) {
+      const reply = `（mock 回复）收到：「${input}」`
+      for (const ch of reply) {
+        await delay(12)
+        yield { type: "text_delta", text: ch }
+      }
+      yield { type: "done", reason: "stop" }
     },
+    interrupt() {},
   }
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms)
-  })
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
