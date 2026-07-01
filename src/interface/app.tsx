@@ -4,15 +4,23 @@ import { Header } from "./components/header"
 import { MessageView } from "./components/message-view"
 import { PromptLine } from "./components/prompt-line"
 import { StatusLine } from "./components/status-line"
+import type { LoginOption, LoginService } from "./login"
+import type { ModelController } from "./model"
+import type { SelectOption } from "./prompt"
+import { SelectPrompt } from "./prompt"
 import type { Responder } from "./responder"
-import type { Message } from "./types"
+import type { Message, Role } from "./types"
+
+type Mode = "chat" | "selecting-login" | "selecting-model"
 
 export interface AppProps {
   responder: Responder
   greeting?: string
+  login?: LoginService
+  models?: ModelController
 }
 
-export function App({ responder, greeting }: AppProps) {
+export function App({ responder, greeting, login, models }: AppProps) {
   const { exit } = useApp()
   const idRef = useRef(0)
   const [messages, setMessages] = useState<Message[]>(() =>
@@ -20,6 +28,13 @@ export function App({ responder, greeting }: AppProps) {
   )
   const [draft, setDraft] = useState("")
   const [busy, setBusy] = useState(false)
+  const [mode, setMode] = useState<Mode>("chat")
+
+  function addMessage(role: Role, content: string) {
+    idRef.current += 1
+    const message: Message = { id: idRef.current, role, content }
+    setMessages((prev) => [...prev, message])
+  }
 
   async function submit(text: string) {
     const trimmed = text.trim()
@@ -28,11 +43,24 @@ export function App({ responder, greeting }: AppProps) {
       exit()
       return
     }
+    if (trimmed === "/login") {
+      setDraft("")
+      if (login === undefined) addMessage("assistant", "登录暂不可用。")
+      else setMode("selecting-login")
+      return
+    }
+    if (trimmed === "/model") {
+      setDraft("")
+      if (models === undefined || models.list().length === 0) {
+        addMessage("assistant", "没有可选模型。")
+      } else {
+        setMode("selecting-model")
+      }
+      return
+    }
 
     const history = messages
-    idRef.current += 1
-    const userMessage: Message = { id: idRef.current, role: "user", content: trimmed }
-    setMessages((prev) => [...prev, userMessage])
+    addMessage("user", trimmed)
     setDraft("")
     setBusy(true)
 
@@ -42,15 +70,35 @@ export function App({ responder, greeting }: AppProps) {
     } catch (error) {
       reply = `⚠ 出错：${error instanceof Error ? error.message : String(error)}`
     }
-
-    idRef.current += 1
-    const assistantMessage: Message = { id: idRef.current, role: "assistant", content: reply }
-    setMessages((prev) => [...prev, assistantMessage])
+    addMessage("assistant", reply)
     setBusy(false)
   }
 
+  async function runLoginOption(option: LoginOption) {
+    setMode("chat")
+    setBusy(true)
+    addMessage("assistant", `开始登录：${option.label}`)
+    try {
+      const result = await option.run((info) => addMessage("assistant", info))
+      addMessage("assistant", result)
+    } catch (error) {
+      addMessage(
+        "assistant",
+        `⚠ 登录失败：${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+    setBusy(false)
+  }
+
+  function selectModel(id: string) {
+    setMode("chat")
+    models?.select(id)
+    addMessage("assistant", `已切换模型：${id}`)
+  }
+
   useInput((input, key) => {
-    if (busy) return
+    // 非聊天模式（登录/模型选择）时，让 SelectPrompt 接管按键。
+    if (busy || mode !== "chat") return
     if (key.return) {
       void submit(draft)
       return
@@ -68,11 +116,26 @@ export function App({ responder, greeting }: AppProps) {
     }
   })
 
+  const loginOptions: SelectOption<LoginOption>[] =
+    login === undefined
+      ? []
+      : login.options.map((option) => ({ label: option.label, value: option }))
+  const modelOptions: SelectOption<string>[] =
+    models === undefined ? [] : models.list().map((m) => ({ label: m.label, value: m.id }))
+
   return (
     <Box flexDirection="column">
       <Header />
       <MessageView messages={messages} />
-      {busy ? <StatusLine /> : <PromptLine value={draft} />}
+      {mode === "selecting-login" ? (
+        <SelectPrompt message="选择登录方式：" options={loginOptions} onSelect={runLoginOption} />
+      ) : mode === "selecting-model" ? (
+        <SelectPrompt message="选择模型：" options={modelOptions} onSelect={selectModel} />
+      ) : busy ? (
+        <StatusLine />
+      ) : (
+        <PromptLine value={draft} />
+      )}
     </Box>
   )
 }
