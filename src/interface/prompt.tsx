@@ -62,3 +62,43 @@ export function promptSelect<T>(message: string, options: SelectOption<T>[]): Pr
     )
   })
 }
+
+export interface TextPromptProps {
+  label: string
+  onSubmit: (value: string) => void
+  onCancel?: () => void
+}
+
+/**
+ * 极简单行文本输入：录入字符（支持整段粘贴）、退格删除、回车提交、Esc 取消。
+ * 自带 useInput，与 SelectPrompt 一样在 App 的某个模式下接管按键。
+ */
+export function TextPrompt({ label, onSubmit, onCancel }: TextPromptProps) {
+  const [value, setValue] = useState("")
+
+  useInput((input, key) => {
+    if (key.return) {
+      onSubmit(value)
+      return
+    }
+    if (key.escape) {
+      onCancel?.()
+      return
+    }
+    if (key.backspace || key.delete) {
+      setValue((current) => current.slice(0, -1))
+      return
+    }
+    // 普通输入；整段粘贴会作为一个 input chunk 到达，直接拼接即可。
+    if (input.length > 0 && !key.ctrl && !key.meta) {
+      setValue((current) => current + input)
+    }
+  })
+
+  return (
+    <Box flexDirection="column">
+      <Text>{label}</Text>
+      <Text color="cyan">{`› ${value}`}</Text>
+    </Box>
+  )
+}

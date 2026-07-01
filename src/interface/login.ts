@@ -1,14 +1,21 @@
 /**
  * 登录能力的接口层契约（provider 无关）。
  *
- * 组合根（bootstrap）把具体登录逻辑（loginCodex + AuthStore）包装成 LoginOption，
- * 注入给界面层；界面层只认 label + run(onInfo)，不知道 codex/openai 的细节。
- * 同一份 LoginService 也被 CLI 复用。
+ * 组合根把具体登录逻辑包装成 LoginOption 注入界面；界面层只认 label + run(ctx)。
+ * ctx 让登录过程既能回报信息（OAuth 的授权 URL/设备码），也能向用户索取文本输入
+ * （API key 登录时粘贴 key）。同一份 LoginService 也被 CLI 复用。
  */
+export interface LoginContext {
+  /** 回报过程信息（授权 URL、设备码等）。 */
+  info(message: string): void
+  /** 向用户索取一行文本（如粘贴 API key），resolve 为用户输入。 */
+  prompt(label: string): Promise<string>
+}
+
 export interface LoginOption {
   label: string
-  /** 执行登录；onInfo 用于把过程信息（授权 URL、设备码等）回报给调用方。resolve 为成功文案。 */
-  run(onInfo: (message: string) => void): Promise<string>
+  /** 执行登录。resolve 为成功文案。 */
+  run(ctx: LoginContext): Promise<string>
 }
 
 export interface LoginService {

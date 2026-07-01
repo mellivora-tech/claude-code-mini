@@ -6,10 +6,13 @@
 export interface ModelChoice {
   id: string
   label: string
+  /** 凭证是否就绪（未配置的模型可选但用不了）。 */
+  configured: boolean
 }
 
 export interface ModelController {
-  list(): ModelChoice[]
+  /** 列出模型及配置状态（异步：需查各 provider 凭证）。 */
+  list(): Promise<ModelChoice[]>
   current(): string
   select(id: string): void
 }

@@ -1,5 +1,5 @@
 import { AuthStore } from "./auth-store"
-import { apiKeyCredential } from "./credential"
+import { storedApiKeyCredential } from "./credential"
 import { CodexProvider } from "./providers/codex"
 import { codexOAuthCredential } from "./providers/codex-oauth"
 import { KimiProvider } from "./providers/kimi"
@@ -12,6 +12,13 @@ import type { ModelMessage, ModelRequest, ModelResponse, ToolDefinition } from "
 export type { ModelInfo } from "./registry"
 export type { ModelPurpose } from "./router"
 export type { ModelMessage, ModelRequest, ModelResponse, ToolDefinition } from "./types"
+
+/** 一个模型的配置状态：是否已具备可用凭证。 */
+export interface ModelStatus {
+  id: string
+  provider: string
+  configured: boolean
+}
 
 /**
  * 模型层门面（facade）：装配 registry + router + providers，对外提供"决策"入口。
@@ -44,30 +51,44 @@ export class ModelService {
   models(): ModelInfo[] {
     return this.registry.list()
   }
+
+  /** 列出模型及其配置状态（凭证是否就绪）。按 provider 缓存 isConfigured 结果。 */
+  async status(): Promise<ModelStatus[]> {
+    const cache = new Map<string, boolean>()
+    const out: ModelStatus[] = []
+    for (const info of this.registry.list()) {
+      let configured = cache.get(info.provider)
+      if (configured === undefined) {
+        const provider = this.registry.getProvider(info.provider)
+        configured = (await provider.isConfigured?.()) ?? true
+        cache.set(info.provider, configured)
+      }
+      out.push({ id: info.id, provider: info.provider, configured })
+    }
+    return out
+  }
 }
 
-// 模型目录：contextWindow 为估值；codex 模型 id 取自 opencode 的 ALLOWED_MODELS，
-// 若后端拒绝该 id，换成 "gpt-5.5" 等再试。
+// 模型目录：contextWindow 为估值。codex id 取自 opencode ALLOWED_MODELS（后端拒绝则换 gpt-5.5 等）；
+// kimi 走 Kimi Code（coding plan）的 OpenAI 兼容模型 id。
 const MODEL_CATALOG: readonly ModelInfo[] = [
   { id: "gpt-5.4", provider: "codex", contextWindow: 272_000 },
-  { id: "kimi-k2", provider: "kimi", contextWindow: 128_000 },
+  { id: "kimi-for-coding", provider: "kimi", contextWindow: 262_144 },
 ]
 
 /**
  * 默认装配：注册 codex / kimi 两个 provider、登记模型目录、配置路由默认值。
  * 组合根（bootstrap）调用它拿到可用的 ModelService。
  *
- * 注意：codex.complete() 已实现（需先 /login）；kimi.complete() 仍是未实现桩。
+ * codex 用订阅登录态（/login）；kimi 用 API key（/login 保存，或环境变量 KIMI_API_KEY）。
  */
 export function createModelService(): ModelService {
   const registry = new ModelRegistry()
-  // 解构避开 index-signature 访问（tsc）与字面量键（biome）的规则冲突。
-  const { MOONSHOT_API_KEY } = process.env
   const authStore = new AuthStore()
 
   registry.registerProvider(new CodexProvider({ credential: codexOAuthCredential(authStore) }))
   registry.registerProvider(
-    new KimiProvider({ credential: apiKeyCredential(MOONSHOT_API_KEY ?? "") }),
+    new KimiProvider({ credential: storedApiKeyCredential(authStore, "kimi", "KIMI_API_KEY") }),
   )
 
   for (const info of MODEL_CATALOG) {
@@ -75,7 +96,7 @@ export function createModelService(): ModelService {
   }
 
   const router = new Router({
-    defaults: { main: "gpt-5.4", subagent: "kimi-k2", cheap: "kimi-k2" },
+    defaults: { main: "gpt-5.4", subagent: "kimi-for-coding", cheap: "kimi-for-coding" },
   })
 
   return new ModelService(registry, router)

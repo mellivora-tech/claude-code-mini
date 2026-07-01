@@ -4,14 +4,20 @@ import { Header } from "./components/header"
 import { MessageView } from "./components/message-view"
 import { PromptLine } from "./components/prompt-line"
 import { StatusLine } from "./components/status-line"
-import type { LoginOption, LoginService } from "./login"
-import type { ModelController } from "./model"
+import type { LoginContext, LoginOption, LoginService } from "./login"
+import type { ModelChoice, ModelController } from "./model"
 import type { SelectOption } from "./prompt"
-import { SelectPrompt } from "./prompt"
+import { SelectPrompt, TextPrompt } from "./prompt"
 import type { Responder } from "./responder"
 import type { Message, Role } from "./types"
 
-type Mode = "chat" | "selecting-login" | "selecting-model"
+type Mode = "chat" | "selecting-login" | "selecting-model" | "text-input"
+
+interface PendingText {
+  label: string
+  resolve: (value: string) => void
+  reject: (reason: Error) => void
+}
 
 export interface AppProps {
   responder: Responder
@@ -29,6 +35,8 @@ export function App({ responder, greeting, login, models }: AppProps) {
   const [draft, setDraft] = useState("")
   const [busy, setBusy] = useState(false)
   const [mode, setMode] = useState<Mode>("chat")
+  const [modelChoices, setModelChoices] = useState<ModelChoice[]>([])
+  const [pendingText, setPendingText] = useState<PendingText | null>(null)
 
   function addMessage(role: Role, content: string) {
     idRef.current += 1
@@ -51,11 +59,7 @@ export function App({ responder, greeting, login, models }: AppProps) {
     }
     if (trimmed === "/model") {
       setDraft("")
-      if (models === undefined || models.list().length === 0) {
-        addMessage("assistant", "没有可选模型。")
-      } else {
-        setMode("selecting-model")
-      }
+      await openModelSelect()
       return
     }
 
@@ -74,12 +78,52 @@ export function App({ responder, greeting, login, models }: AppProps) {
     setBusy(false)
   }
 
+  async function openModelSelect() {
+    if (models === undefined) {
+      addMessage("assistant", "没有可选模型。")
+      return
+    }
+    const choices = await models.list()
+    if (choices.length === 0) {
+      addMessage("assistant", "没有可选模型。")
+      return
+    }
+    setModelChoices(choices)
+    setMode("selecting-model")
+  }
+
+  // 索取一行文本输入：切到 text-input 模式，回车 resolve、Esc reject。
+  function requestText(label: string): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      setPendingText({ label, resolve, reject })
+      setMode("text-input")
+    })
+  }
+
+  function onTextSubmit(value: string) {
+    const pending = pendingText
+    setPendingText(null)
+    setMode("chat")
+    pending?.resolve(value)
+  }
+
+  function onTextCancel() {
+    const pending = pendingText
+    setPendingText(null)
+    setMode("chat")
+    pending?.reject(new Error("已取消"))
+  }
+
   async function runLoginOption(option: LoginOption) {
     setMode("chat")
     setBusy(true)
-    addMessage("assistant", `开始登录：${option.label}`)
+    addMessage("assistant", `开始：${option.label}`)
+    const ctx: LoginContext = {
+      info: (info) => addMessage("assistant", info),
+      prompt: (label) => requestText(label),
+    }
     try {
-      const result = await option.run((info) => addMessage("assistant", info))
+      const result = await option.run(ctx)
       addMessage("assistant", result)
     } catch (error) {
       addMessage(
@@ -97,10 +141,14 @@ export function App({ responder, greeting, login, models }: AppProps) {
   }
 
   useInput((input, key) => {
-    // 非聊天模式（登录/模型选择）时，让 SelectPrompt 接管按键。
+    // 非聊天模式（登录/模型选择/文本输入）时，让对应组件接管按键。
     if (busy || mode !== "chat") return
     if (key.return) {
-      void submit(draft)
+      // 兜底：submit 任何分支（含 /model 的异步列举）抛错都渲进 TUI，不被 void 吞掉。
+      submit(draft).catch((error) => {
+        setBusy(false)
+        addMessage("assistant", `⚠ 出错：${error instanceof Error ? error.message : String(error)}`)
+      })
       return
     }
     if (key.ctrl && input === "c") {
@@ -120,8 +168,10 @@ export function App({ responder, greeting, login, models }: AppProps) {
     login === undefined
       ? []
       : login.options.map((option) => ({ label: option.label, value: option }))
-  const modelOptions: SelectOption<string>[] =
-    models === undefined ? [] : models.list().map((m) => ({ label: m.label, value: m.id }))
+  const modelOptions: SelectOption<string>[] = modelChoices.map((m) => ({
+    label: m.configured ? `${m.label} ✓` : `${m.label} ·未配置`,
+    value: m.id,
+  }))
 
   return (
     <Box flexDirection="column">
@@ -131,6 +181,8 @@ export function App({ responder, greeting, login, models }: AppProps) {
         <SelectPrompt message="选择登录方式：" options={loginOptions} onSelect={runLoginOption} />
       ) : mode === "selecting-model" ? (
         <SelectPrompt message="选择模型：" options={modelOptions} onSelect={selectModel} />
+      ) : mode === "text-input" && pendingText !== null ? (
+        <TextPrompt label={pendingText.label} onSubmit={onTextSubmit} onCancel={onTextCancel} />
       ) : busy ? (
         <StatusLine />
       ) : (

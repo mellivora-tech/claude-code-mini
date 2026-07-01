@@ -11,4 +11,6 @@ export interface ModelProvider {
   /** provider 标识，与 ModelInfo.provider、Router 配置对应，如 "codex" / "kimi"。 */
   readonly id: string
   complete(request: ModelRequest): Promise<ModelResponse>
+  /** 是否已具备凭证（轻量、不发网络）。缺省视为已配置。 */
+  isConfigured?(): Promise<boolean>
 }

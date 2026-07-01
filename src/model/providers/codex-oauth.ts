@@ -2,6 +2,7 @@ import { createServer } from "node:http"
 import { setTimeout as sleep } from "node:timers/promises"
 import type { AuthStore, OAuthTokens } from "../auth-store"
 import type { Credential } from "../credential"
+import { USER_AGENT } from "../user-agent"
 
 /**
  * Codex（ChatGPT 订阅）OAuth 登录 —— 路径 A：自跑 OAuth PKCE 流程、存自己的 token。
@@ -17,7 +18,6 @@ const ISSUER = "https://auth.openai.com"
 export const CODEX_RESPONSES_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 const CALLBACK_PORT = 1455
 const DEVICE_POLL_SAFETY_MARGIN_MS = 3000
-export const USER_AGENT = `claude-code-mini/0.1.0 (${process.platform})`
 // originator 随请求上报。实测自定义值（如 "claude-code-mini"）会被 OpenAI 拒绝授权，
 // 必须用上游认可的取值——沿用 opencode 的 "opencode"。改动前先确认新值能通过授权。
 export const ORIGINATOR = "opencode"
@@ -317,6 +317,9 @@ export function codexOAuthCredential(store: AuthStore, deps: CodexCredentialDeps
         })
       }
       return buildHeaders(await refreshing)
+    },
+    async isConfigured(): Promise<boolean> {
+      return (await store.get(STORE_KEY)) !== undefined
     },
   }
 }

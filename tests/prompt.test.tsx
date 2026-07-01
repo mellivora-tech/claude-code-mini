@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { render } from "ink-testing-library"
-import { SelectPrompt } from "../src/interface/prompt"
+import { SelectPrompt, TextPrompt } from "../src/interface/prompt"
 
 const ESC = String.fromCharCode(27)
 const DOWN = `${ESC}[B`
@@ -50,5 +50,18 @@ describe("SelectPrompt", () => {
     stdin.write(ENTER)
     await tick()
     expect(selected).toEqual(["c"])
+  })
+})
+
+describe("TextPrompt", () => {
+  test("录入（含整段粘贴）后回车提交", async () => {
+    const submitted: string[] = []
+    const { stdin } = render(<TextPrompt label="key:" onSubmit={(v) => submitted.push(v)} />)
+    stdin.write("sk-")
+    stdin.write("abc123") // 模拟一次性粘贴
+    await tick()
+    stdin.write(ENTER)
+    await tick()
+    expect(submitted).toEqual(["sk-abc123"])
   })
 })

@@ -1,7 +1,8 @@
 import type { Credential } from "../credential"
 import type { ModelProvider } from "../provider"
 import type { ModelRequest, ModelResponse } from "../types"
-import { CODEX_RESPONSES_ENDPOINT, ORIGINATOR, USER_AGENT } from "./codex-oauth"
+import { USER_AGENT } from "../user-agent"
+import { CODEX_RESPONSES_ENDPOINT, ORIGINATOR } from "./codex-oauth"
 
 export interface CodexProviderOptions {
   credential: Credential
@@ -83,6 +84,10 @@ export class CodexProvider implements ModelProvider {
   constructor(options: CodexProviderOptions) {
     this.credential = options.credential
     this.baseURL = options.baseURL ?? CODEX_RESPONSES_ENDPOINT
+  }
+
+  async isConfigured(): Promise<boolean> {
+    return (await this.credential.isConfigured?.()) ?? true
   }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
