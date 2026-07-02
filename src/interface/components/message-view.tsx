@@ -21,18 +21,36 @@ export function MessageView({ messages }: { messages: readonly Message[] }) {
       {messages.map((message) => {
         const meta = ROLE_META[message.role]
         return (
-          <Box key={message.id} marginBottom={1}>
-            <Box marginRight={1}>
-              <Text bold color={meta.color}>
-                {meta.label}
-              </Text>
-            </Box>
-            <Box flexGrow={1}>
-              <Text>{message.content}</Text>
+          <Box key={message.id} marginBottom={1} flexDirection="column">
+            {message.reasoning !== undefined && message.reasoning.length > 0 && (
+              <ReasoningBlock text={message.reasoning} />
+            )}
+            <Box flexDirection="row">
+              <Box marginRight={1}>
+                <Text bold color={meta.color}>
+                  {meta.label}
+                </Text>
+              </Box>
+              <Box flexGrow={1}>
+                <Text>{message.content}</Text>
+              </Box>
             </Box>
           </Box>
         )
       })}
+    </Box>
+  )
+}
+
+function ReasoningBlock({ text }: { text: string }) {
+  return (
+    <Box marginLeft={2} flexDirection="column">
+      <Text color="gray" dimColor>
+        ▼ 思考
+      </Text>
+      <Text color="gray" dimColor>
+        {text}
+      </Text>
     </Box>
   )
 }

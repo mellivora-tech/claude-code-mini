@@ -10,6 +10,7 @@ export type DoneReason = "stop" | "max_steps" | "aborted" | "error"
 
 export type QueryEvent =
   | { type: "text_delta"; text: string } // 助手文本增量
+  | { type: "reasoning_delta"; text: string } // 模型思考过程增量
   | { type: "assistant"; content: string; toolCalls?: ToolCall[] } // 一条完整助手消息落定
   | { type: "tool_start"; call: ToolCall } // 开始执行某工具
   | { type: "tool_result"; callId: string; output: string; isError: boolean } // 工具结果

@@ -52,8 +52,8 @@ export async function* query(
     let final: ModelResponse | undefined
     try {
       for await (const event of streamWithRetry(deps, request, ctx.signal)) {
-        if (event.type === "text_delta") {
-          yield { type: "text_delta", text: event.text }
+        if (event.type === "text_delta" || event.type === "reasoning_delta") {
+          yield event
         } else {
           final = event.response
           if (event.usage !== undefined) yield { type: "usage", usage: event.usage }

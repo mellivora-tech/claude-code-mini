@@ -65,6 +65,23 @@ export function extractTextDelta(payload: string): string {
 }
 
 /**
+ * 从单个 SSE data payload 里取出本片思考增量（response.reasoning.delta 等）。
+ * 不同后端字段名可能不同，这里列出常见几种做 fallback 探测。
+ */
+export function extractReasoningDelta(payload: string): string {
+  let event: { type?: string; delta?: string; reasoning?: string; reasoning_content?: string }
+  try {
+    event = JSON.parse(payload) as { type?: string; delta?: string; reasoning?: string; reasoning_content?: string }
+  } catch {
+    return ""
+  }
+  if (event.type === "response.reasoning.delta" && typeof event.delta === "string") return event.delta
+  if (typeof event.reasoning_content === "string") return event.reasoning_content
+  if (typeof event.reasoning === "string") return event.reasoning
+  return ""
+}
+
+/**
  * 从 Responses 的 SSE 负载里抽取助手文本：累加所有 response.output_text.delta。
  * 纯函数，方便测试；不处理工具调用（text-first）。整段缓冲版本，供非流式场景/测试。
  */
@@ -121,10 +138,14 @@ export class CodexProvider implements ModelProvider {
     }
     let text = ""
     for await (const payload of sseEvents(res.body)) {
-      const delta = extractTextDelta(payload)
-      if (delta.length > 0) {
-        text += delta
-        yield { type: "text_delta", text: delta }
+      const textDelta = extractTextDelta(payload)
+      if (textDelta.length > 0) {
+        text += textDelta
+        yield { type: "text_delta", text: textDelta }
+      }
+      const reasoningDelta = extractReasoningDelta(payload)
+      if (reasoningDelta.length > 0) {
+        yield { type: "reasoning_delta", text: reasoningDelta }
       }
     }
     yield { type: "done", response: { type: "text", text } }

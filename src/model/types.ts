@@ -62,4 +62,5 @@ export interface Usage {
  */
 export type ModelStreamEvent =
   | { type: "text_delta"; text: string }
+  | { type: "reasoning_delta"; text: string }
   | { type: "done"; response: ModelResponse; usage?: Usage }

@@ -76,6 +76,7 @@ interface StreamChunk {
   choices?: {
     delta?: {
       content?: string
+      reasoning_content?: string
       tool_calls?: {
         index: number
         id?: string
@@ -176,6 +177,18 @@ export class KimiProvider implements ModelProvider {
     for await (const payload of sseEvents(res.body)) {
       const delta = acc.push(payload)
       if (delta.length > 0) yield { type: "text_delta", text: delta }
+
+      // 探测 Kimi / OpenAI 兼容端点的 reasoning 字段。
+      let chunk: StreamChunk
+      try {
+        chunk = JSON.parse(payload) as StreamChunk
+      } catch {
+        continue
+      }
+      const reasoning = chunk.choices?.[0]?.delta?.reasoning_content
+      if (typeof reasoning === "string" && reasoning.length > 0) {
+        yield { type: "reasoning_delta", text: reasoning }
+      }
     }
     yield { type: "done", response: acc.result() }
   }

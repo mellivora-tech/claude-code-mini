@@ -39,15 +39,22 @@ export function App({ responder, greeting, login, models }: AppProps) {
   const [modelChoices, setModelChoices] = useState<ModelChoice[]>([])
   const [pendingText, setPendingText] = useState<PendingText | null>(null)
 
-  function addMessage(role: Role, content: string): number {
+  function addMessage(role: Role, content: string, reasoning?: string): number {
     idRef.current += 1
     const id = idRef.current
-    setMessages((prev) => [...prev, { id, role, content }])
+    const message: Message = reasoning === undefined ? { id, role, content } : { id, role, content, reasoning }
+    setMessages((prev) => [...prev, message])
     return id
   }
 
   function appendTo(id: number, text: string) {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: m.content + text } : m)))
+  }
+
+  function appendReasoning(id: number, text: string) {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, reasoning: (m.reasoning ?? "") + text } : m)),
+    )
   }
 
   function setContent(id: number, content: string) {
@@ -84,7 +91,7 @@ export function App({ responder, greeting, login, models }: AppProps) {
     setBusy(false)
   }
 
-  // 消费一轮事件流：text_delta 打字机、tool_* 状态行、done 收尾。
+  // 消费一轮事件流：text_delta 打字机、reasoning_delta 思考链、tool_* 状态行、done 收尾。
   async function consume(events: AsyncIterable<QueryEvent>) {
     let streamingId: number | null = null // 当前正在追加文本的 assistant 气泡
     const toolLines = new Map<string, number>() // callId → 状态行消息 id
@@ -92,6 +99,15 @@ export function App({ responder, greeting, login, models }: AppProps) {
       if (event.type === "text_delta") {
         if (streamingId === null) streamingId = addMessage("assistant", "")
         appendTo(streamingId, event.text)
+      } else if (event.type === "reasoning_delta") {
+        if (streamingId === null) streamingId = addMessage("assistant", "", "")
+        appendReasoning(streamingId, event.text)
+      } else if (event.type === "assistant") {
+        // 兜底：有些后端不流 text_delta，直接在 assistant 事件给完整文本。
+        if (event.content.length > 0) {
+          if (streamingId === null) streamingId = addMessage("assistant", event.content)
+          else setContent(streamingId, event.content)
+        }
       } else if (event.type === "tool_start") {
         streamingId = null // 工具后的文本另起气泡，排在工具行下方
         toolLines.set(event.call.id, addMessage("system", `⚙ ${event.call.name} 运行中…`))
