@@ -14,9 +14,9 @@ function fakeProvider(
   return {
     id,
     seen,
-    async complete(request: ModelRequest): Promise<ModelResponse> {
+    async *stream(request: ModelRequest) {
       seen.push(request)
-      return response
+      yield { type: "done", response } as const
     },
   }
 }

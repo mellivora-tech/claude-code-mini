@@ -7,11 +7,24 @@ import type { ModelInfo } from "./registry"
 import { ModelRegistry } from "./registry"
 import type { ModelPurpose } from "./router"
 import { Router } from "./router"
-import type { ModelMessage, ModelRequest, ModelResponse, ToolDefinition } from "./types"
+import type {
+  ModelMessage,
+  ModelRequest,
+  ModelResponse,
+  ModelStreamEvent,
+  ToolDefinition,
+} from "./types"
 
 export type { ModelInfo } from "./registry"
 export type { ModelPurpose } from "./router"
-export type { ModelMessage, ModelRequest, ModelResponse, ToolDefinition } from "./types"
+export type {
+  ModelMessage,
+  ModelRequest,
+  ModelResponse,
+  ModelStreamEvent,
+  ToolDefinition,
+  Usage,
+} from "./types"
 
 /** 一个模型的配置状态：是否已具备可用凭证。 */
 export interface ModelStatus {
@@ -30,9 +43,14 @@ export class ModelService {
     private readonly router: Router,
   ) {}
 
-  /** 显式指定模型的调用。 */
+  /** 显式指定模型的流式调用——上层（query）用这个拿实时增量。 */
+  stream(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
+    return this.registry.providerForModel(request.model).stream(request)
+  }
+
+  /** 显式指定模型的一次性调用：抽干流、返回最终响应（状态检查 / 不关心增量的调用者用）。 */
   async complete(request: ModelRequest): Promise<ModelResponse> {
-    return this.registry.providerForModel(request.model).complete(request)
+    return drain(this.stream(request))
   }
 
   /** 按用途路由后调用——上层通常用这个，不必关心具体模型 id。 */
@@ -67,6 +85,16 @@ export class ModelService {
     }
     return out
   }
+}
+
+/** 抽干一个模型流，返回其最终响应（done 事件里装配好的 ModelResponse）。 */
+async function drain(stream: AsyncIterable<ModelStreamEvent>): Promise<ModelResponse> {
+  let response: ModelResponse | undefined
+  for await (const event of stream) {
+    if (event.type === "done") response = event.response
+  }
+  if (response === undefined) throw new Error("模型流未产出 done 事件")
+  return response
 }
 
 // 模型目录：contextWindow 为估值。codex id 取自 opencode ALLOWED_MODELS（后端拒绝则换 gpt-5.5 等）；
